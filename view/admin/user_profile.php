@@ -31,6 +31,15 @@
 							id="ea_sub_pending_post" />
 							<?php _e( 'Notify me when posts require review', 'swea' ); ?>
 					</label></div>
+				<div>
+					<label for="ea_sub_edit_post">
+						<input 
+							type="checkbox" 
+							name="ea_sub_edit_post" 
+							<?php checked( $checked_edit_post ); ?> 
+							id="ea_sub_edit_post" />
+							<?php _e( 'Notify me when posts are edited', 'swea' ); ?>
+					</label></div>
 			</td>
 		</tr>
 

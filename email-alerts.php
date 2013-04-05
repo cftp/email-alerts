@@ -24,6 +24,7 @@ class EmailAlerts extends EmailAlerts_Plugin
 		$this->add_action( 'wp_set_comment_status', null, null, 2 );
 		$this->add_action( 'comment_post', null, null, 2 );
 		$this->add_action( 'transition_post_status', null, null, 3 );
+		$this->add_action( 'save_post', null, null, 1 );
 		// Let the user subscribe to the various notifications
 		$this->add_action( 'show_user_profile', 'user_profile' );
 		$this->add_action( 'edit_user_profile', 'user_profile' );
@@ -98,12 +99,32 @@ class EmailAlerts extends EmailAlerts_Plugin
 		$this->send_notifications( $subscription );
 	}
 
+	function save_post( $post_id ) {
+		// Get the post object from the ID
+		$post = get_post( $post_id );
+		
+		// Since this action hook is called twice during a normal save (once for the post and once for
+		// the revision), we check that we only email out on the actual post save.
+		if ( $post->post_type == 'revision' )
+			return;
+			
+		$subscription = 'edit_post';
+		// Get the subscribers
+		$this->subscriber_ids = $this->get_subscriber_ids( $subscription );
+		// Store the post (this action hook only takes the post ID, so we need to fetch the post object)
+		$this->post = & $post;
+		// All ready, send the notifications
+		$this->send_notifications( $subscription );
+	}
+
 	function user_profile() {
 		global $profileuser;
 		$vars = array();
 		// Can only subscribe to "publish post" notifications if you can publish posts
 		$vars[ 'can_sub_publish_post' ] = ( $profileuser->has_cap( 'publish_posts' ) ) ? true : false;
 		$vars[ 'can_sub_pending_post' ] = ( $profileuser->has_cap( 'publish_posts' ) ) ? true : false;
+		// Can only subscribe to "edit post" notifications if you can edit posts
+		$vars[ 'can_sub_edit_post' ] = ( $profileuser->has_cap( 'edit_posts' ) ) ? true : false;
 		// Can only subscribe to "hold comment" notifications if you can moderate comments
 		// Can only subscribe to "approve comment" notifications if you can moderate comments
 		$vars[ 'can_sub_hold_comment' ] = ( $profileuser->has_cap( 'moderate_comments' ) ) ? true : false;
@@ -114,6 +135,7 @@ class EmailAlerts extends EmailAlerts_Plugin
 		// Get all the subscription stuff
 		$vars[ 'checked_publish_post' ] = $this->get_subscription( 'publish_post' );
 		$vars[ 'checked_pending_post' ] = $this->get_subscription( 'pending_post' );
+		$vars[ 'checked_edit_post' ] = $this->get_subscription( 'edit_post' );
 		$vars[ 'checked_hold_comment' ] = $this->get_subscription( 'hold_comment' );
 		$vars[ 'checked_approve_comment' ] = $this->get_subscription( 'approve_comment' );
 		$this->render_admin( 'user_profile', $vars );
@@ -124,6 +146,7 @@ class EmailAlerts extends EmailAlerts_Plugin
 		// removed. This is a Good Thing™.
 		$this->set_subscription( 'publish_post' );
 		$this->set_subscription( 'pending_post' );
+		$this->set_subscription( 'edit_post' );
 		$this->set_subscription( 'hold_comment' );
 		$this->set_subscription( 'approve_comment' );
 	}
@@ -139,13 +162,18 @@ class EmailAlerts extends EmailAlerts_Plugin
 		$vars[ 'blog_name' ] = get_bloginfo( 'name' );
 		// Post
 		$vars[ 'post' ] = & $this->post;
+		// Current user (so we can avoid sending notifications to the person who has just done the deed)
+		$current_user = wp_get_current_user();
 		foreach( $this->subscriber_ids AS $subscriber_id )
 		{
-			$subscriber = new WP_User( $subscriber_id );
-			// Subscriber name
-			$vars[ 'subscriber_name' ] = $subscriber->display_name;
-			$this->send_notification( $subscriber, $subscription, $vars );
-			unset( $subscriber );
+			// Only run the alert for users who are not the person logged in
+			if ( $subscriber_id != $current_user->ID ) { 
+				$subscriber = new WP_User( $subscriber_id );
+				// Subscriber name
+				$vars[ 'subscriber_name' ] = $subscriber->display_name;
+				$this->send_notification( $subscriber, $subscription, $vars );
+				unset( $subscriber );
+			}
 		}
 	}
 
@@ -199,6 +227,17 @@ class EmailAlerts extends EmailAlerts_Plugin
 		return $vars;
 	}
 
+	function vars_edit_post() {
+		$vars = array();
+		$vars[ 'post_edit_link' ] = get_edit_post_link( $this->post->ID );
+		$post_author = new WP_User( $this->post->post_author );
+		$vars[ 'post_author_name' ] = $post_author->display_name;
+		$post_edited_by = wp_get_current_user();
+		$vars[ 'blog_name' ] = get_bloginfo( 'name' );
+		$vars[ 'post_edited_by' ] = $post_edited_by->display_name;
+		return $vars;
+	}
+
 	function vars_pending_post() {
 		$vars = array();
 		// N.B. The get_edit_post_link function will check the caps of the
@@ -207,6 +246,7 @@ class EmailAlerts extends EmailAlerts_Plugin
 		$vars[ 'post_edit_link' ] = get_edit_post_link( $this->post->ID );
 		$post_author = new WP_User( $this->post->post_author );
 		$vars[ 'post_author_name' ] = $post_author->display_name;
+		$vars[ 'blog_name' ] = get_bloginfo( 'name' );
 		return $vars;
 	}
 
@@ -219,6 +259,7 @@ class EmailAlerts extends EmailAlerts_Plugin
 		$current_user = wp_get_current_user();
 		$vars[ 'acting_admin_name' ] = $current_user->display_name;
 		$vars[ 'acting_admin_email' ] = $current_user->user_email;
+		$vars[ 'blog_name' ] = get_bloginfo( 'name' );
 		return $vars;
 	}
 
@@ -236,6 +277,10 @@ class EmailAlerts extends EmailAlerts_Plugin
 
 	function subject_publish_post( & $vars ) {
 		return sprintf( __( '%1$s: Post published', 'email-alerts' ), $vars[ 'blog_name' ] );
+	}
+
+	function subject_edit_post( & $vars ) {
+		return sprintf( __( '%1$s: Post edited', 'email-alerts' ), $vars[ 'blog_name' ] );
 	}
 
 	function get_subscription( $subscription ) {
